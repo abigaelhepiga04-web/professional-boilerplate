@@ -22,7 +22,7 @@ Setup Instructions
 
 1. Create folder named professional-boilerplate
 2. Open the folder in VS Code 
-3. Install all indepedencies
+3. Install all dependencies
 4. Setup all folder structures with its respective files
 5. Configure .env to connect to the database
 6. Run migrations & seed initial data
