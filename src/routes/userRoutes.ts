@@ -8,17 +8,20 @@ import {
     paginationQuerySchema 
 } from '../dto/user.dto';
 import { asyncHandler } from '../utils/asyncHandler';
+import { authMiddleware } from '../middleware/auth';
 
 export const userRoutes = Router();
 
 userRoutes.get(
     '/',
+    authMiddleware,
     validate(paginationQuerySchema, 'query'),
     asyncHandler(UserController.getAll)
 );
 
 userRoutes.get(
     '/:id',
+    authMiddleware,
     validate(idParamSchema, 'params'),
     asyncHandler(UserController.getById)
 );
@@ -31,6 +34,7 @@ userRoutes.post(
 
 userRoutes.put(
     '/:id',
+    authMiddleware,
     validate(idParamSchema, 'params'),
     validate(updateUserSchema),
     asyncHandler(UserController.update)
@@ -38,6 +42,7 @@ userRoutes.put(
 
 userRoutes.delete(
     '/:id',
+    authMiddleware,
     validate(idParamSchema, 'params'),
     asyncHandler(UserController.delete)
 );
