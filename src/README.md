@@ -197,3 +197,134 @@ A JWT is stateless because all user claims (such as userId and email) and verifi
 9. How does the auth middleware know which user is making the request?authMiddleware extracts the token from the Authorization header, verifies its signature with jwt.verify(), decodes the embedded user payload ({ userId, email }), and attaches it to the Express request object (req.user = decoded) so downstream controllers know exactly which user initiated the request.
 
 10. If you had to implement role-based authorization (e.g., admin vs. regular user), how would you modify your current setup?Database & Entity: Add a role column (e.g., 'user' | 'admin', defaulting to 'user') to the User entity and generate a TypeORM migration.JWT Payload: Include role: user.role when signing the JWT in AuthService.login and expose it on req.user.Role Middleware: Create a requireRole(...allowedRoles) middleware to run after authMiddleware that checks whether allowedRoles.includes(req.user.role) and throws a 403 ForbiddenError if the user lacks permission.
+
+
+Activity 10: Email Verification & Password Reset
+
+# Authentication API with Email Verification & Password Reset
+
+A Node.js, Express, TypeScript, TypeORM, and MySQL authentication service extended with **email verification**, **password reset**, **Nodemailer** email delivery, **Joi** request validation, structured logging, and centralized error handling.
+
+## Authentication Flow Documentation
+
+### 1. Registration & Email Verification Flow
+1. A client sends `POST /api/auth/register` with `name`, `email`, `password`, and optional `age`.
+2. The service checks whether `email` already exists in `users` (throwing a `409 Conflict` if found), hashes the password with `bcrypt`, generates a 64-character hex `verificationToken` using `crypto.randomBytes(32).toString('hex')`, sets a **24-hour** `verificationTokenExpiry`, and saves the user with `isVerified = false`.
+3. `EmailService.sendVerificationEmail()` sends an HTML email containing a verification link (`${FRONTEND_URL}/verify-email?token=<token>`).
+4. Attempting `POST /api/auth/login` before verifying returns `401 Unauthorized` asking the user to verify their email address first.
+5. Clicking the link or calling `GET /api/auth/verify-email?token=<token>` validates that the token exists, the account is not already verified, and the token has not expired; it then sets `isVerified = true` and clears `verificationToken` and `verificationTokenExpiry` to `null`.
+6. If a user never received or lost their verification email, `POST /api/auth/resend-verification` generates a fresh token and 24-hour expiry for unverified accounts while returning a generic response so account existence isn't leaked.
+
+### 2. Login Flow
+1. A client sends `POST /api/auth/login` with `email` and `password`.
+2. The service looks up the user (including `password`, `isActive`, and `isVerified`), verifies `isVerified` is true and `isActive` is true, compares the password with `bcrypt.compare()`, and signs a JWT containing `userId` and `email`.
+
+### 3. Forgot Password & Reset Password Flow
+1. A client sends `POST /api/auth/forgot-password` with `email`.
+2. Regardless of whether the email exists or is verified, the endpoint returns a generic `200 OK` message (`"If an account with that email exists, a reset link has been sent."`) to prevent email enumeration. For existing, verified accounts, it generates a 64-character hex `resetPasswordToken` with a **1-hour** `resetPasswordExpiry` and sends a reset email (`${FRONTEND_URL}/reset-password?token=<token>`).
+3. A client sends `POST /api/auth/reset-password` with `token` and `newPassword`.
+4. The service validates the token and checks that `resetPasswordExpiry` is in the future, hashes `newPassword` with `bcrypt`, updates `password`, and clears `resetPasswordToken` and `resetPasswordExpiry` to `null`.
+
+## Testing with Ethereal (Viewing Emails)
+
+During development and lab testing, **Ethereal** acts as a fake SMTP catch-all server so real emails are not sent to external inboxes:
+
+1. Generate test SMTP credentials:
+   ```bash
+   node -e "const nodemailer = require('nodemailer'); nodemailer.createTestAccount().then(account => { console.log('User:', account.user); console.log('Pass:', account.pass); console.log('Host:', account.smtp.host); console.log('Port:', account.smtp.port); })"
+
+2. Add the credentials to your .env file (SMTP_HOST=smtp.ethereal.email, SMTP_PORT=587, SMTP_USER=..., SMTP_PASS=..., EMAIL_FROM=noreply@yourapp.com).
+
+3. Start the server (npm run dev) and trigger registration or forgot-password.
+
+4. Look for the 📧 Ethereal preview URL log entry in your terminal output and open that https://ethereal.email/message/... link in your browser to inspect the rendered HTML email and copy the token query parameter from the action link.
+
+## List of all endpoints with examples
+
+POST /api/auth/registerRegisters a new user and dispatches a verification email.   
+
+JSON{
+  "name": "John Doe",
+  "email": "john.doe@example.com",
+  "password": "Password123",
+  "age": 30
+}
+
+GET /api/auth/verify-email?token=<token>
+Verifies a user's email address using the single-use verification token.   
+GET http://localhost:3000/api/auth/verify-email?token=17c7a3d87709245e81319717740b94295ed8a2e581b1bff954525c91b31757c1
+
+POST /api/auth/resend-verification
+Resends a verification email if the account exists and is not yet verified.   
+JSON{
+  "email": "john.doe@example.com"
+}
+
+POST /api/auth/login
+Authenticates a verified, active user and returns a JWT.  
+JSON{
+  "email": "john.doe@example.com",
+  "password": "Password123"
+}
+
+POST /api/auth/forgot-password
+Initiates the password reset flow without revealing whether the account exists.   
+JSON{
+  "email": "john.doe@example.com"
+}
+
+POST /api/auth/reset-password
+Resets the user's password using a valid, unexpired reset token.
+JSON{
+  "token": "xyz789...",
+  "newPassword": "NewPassword456"
+}
+
+GET /api/auth/me
+Returns the authenticated user's profile when provided a valid. 
+Authorization: Bearer <jwt> header.
+GET http://localhost:3000/api/auth/me
+Authorization: Bearer <your_jwt_token>
+
+## Security Features Implemented
+1. Cryptographically strong random tokens: Tokens are generated with crypto.randomBytes(32).toString('hex') (256 bits of entropy).
+Token expiration windows: Verification tokens expire after 24 hours and reset tokens expire after 1 hour.
+
+2. One-time token consumption: Tokens and their expiry timestamps are cleared (null) immediately after successful verification or password reset.
+
+3. Email enumeration protection: Forgot-password and resend-verification responses avoid disclosing whether an email address is registered.
+
+4. Hidden sensitive entity fields: Columns such as password, verificationToken, and resetPasswordToken use select: false on the User entity and are indexed in the database.
+
+5. Password hashing & input validation: Passwords are hashed with bcrypt, and request payloads are validated with Joi schemas.
+
+Reflection Questions
+1. Why is email verification important for security? What problems does it prevent?
+Email verification proves that the person registering an account actually controls the email address they entered. Without it, attackers can register accounts using someone else's email address—causing unwanted notifications or inbox clutter for the victim, potentially claiming usernames/handles tied to that email, or creating accounts with typos that prevent legitimate users from registering or recovering access later. It also improves deliverability and account integrity because verified users are more likely to receive security alerts and password recovery links.
+
+2. Explain the "always return success" pattern in forgot password. Why is it a security best practice?
+The "always return success" pattern returns the same neutral confirmation message (such as "If an account with that email exists, a reset link has been sent.") whether the email exists in the database or not. This prevents attackers from using the forgot-password endpoint as an oracle to discover valid user accounts, which would otherwise give them a targeted list of emails for phishing, credential stuffing, or brute-force attacks.
+
+3. What's the difference between a verification token and a reset token? Why do they have different expiration times?
+A verification token confirms ownership of a newly registered (or changed) email address and flips isVerified to true, whereas a reset token authorizes changing an account's password when the user cannot supply their current password. Reset tokens carry higher immediate risk if intercepted because they can directly take over an account, so they use a shorter expiration window (1 hour) to limit the window of exposure. Verification tokens generally allow a longer window (24 hours) because users may not check their email immediately after signing up and the account cannot log in until verified anyway.
+
+4. Why do we use crypto.randomBytes(32) instead of Math.random() or Date.now() for token generation?
+Math.random() is a pseudo-random number generator not designed for cryptographic security, meaning its outputs can potentially be predicted or guessed if enough values or internal state clues are observed. Date.now() is deterministic/guessable based on timestamps—if an attacker knows roughly when a request was made, the search space is tiny. crypto.randomBytes(32) draws from the operating system's cryptographically secure pseudo-random number generator (CSPRNG), producing 256 bits of high-entropy randomness that cannot be practically guessed or brute-forced.
+
+5. What happens if a user never verifies their email? How does your system handle this?
+In this system, an unverified user has isVerified = false and is blocked from logging in (POST /api/auth/login throws a 401 Unauthorized error telling them to verify their email first). They can request a new verification email via POST /api/auth/resend-verification if their 24-hour token expires, and forgotPassword avoids sending reset links to unverified accounts. In a production system, you might also periodically clean up stale, unverified accounts after a set retention period so unverified emails don't sit around indefinitely.
+
+6. Explain why tokens are cleared after use. What security risk does this prevent?
+Clearing verificationToken / verificationTokenExpiry and resetPasswordToken / resetPasswordExpiry to null after use enforces single-use (one-time) tokens. If a token remained stored and valid after being used, anyone who later found it in browser history, logs, forwarded emails, or a compromised client could replay it—for example, reusing a password reset token to change the password again even after the legitimate user already reset it.
+
+7. What is email enumeration and how does your implementation prevent it?
+Email enumeration is an attack where an adversary probes endpoints (like registration, login, or password reset) to determine whether specific email addresses have accounts on the system. Our implementation prevents it in forgotPassword and resendVerification by returning the same generic success message whether the user exists or not (and logging internal warnings server-side rather than exposing account status in the HTTP response). (Note: Registration still returns 409 Conflict for an already-registered email, which is common in standard sign-up UX, though some high-security apps handle even that more cautiously.)
+
+8. If you had to implement two-factor authentication (2FA) on top of this system, how would you approach it?
+I would add 2FA fields on the User entity (such as isTwoFactorEnabled, a select: false encrypted twoFactorSecret for TOTP authenticator apps, and hashed backup/recovery codes) along with setup and verification endpoints (/2fa/setup, /2fa/verify-setup, /2fa/disable). During POST /api/auth/login, once email, password, isVerified, and isActive pass, I would check isTwoFactorEnabled: if enabled, instead of immediately issuing the final session JWT, I would issue a short-lived, limited-scope temporary challenge token and require POST /api/auth/login/2fa with a valid 6-digit TOTP code (or recovery code) before minting the full access/refresh token pair.
+
+9. What are the trade-offs between using Ethereal (test service) vs. SendGrid (production service)?
+Ethereal is free, requires no account setup, and captures messages in a sandbox preview URL rather than delivering them to real users—making it ideal for local development and automated/manual testing without spamming real inboxes or burning production quota. However, Ethereal is not meant for real user delivery or high reliability. SendGrid is built for production deliverability, analytics, reputation management, and scale, with dedicated infrastructure and webhooks—but it introduces paid tiers/quotas, API key/domain setup (SPF/DKIM/DMARC), and real external side effects during testing if not separated by environment.
+
+10. How would you handle a situation where a user's email provider marks your emails as spam?
+First, I would verify DNS authentication records for the sending domain—specifically SPF, DKIM, and DMARC—and ensure the EMAIL_FROM address matches a domain you control rather than a generic/unauthenticated sender. Next, I would audit the email content and sending practices: keep HTML clean and consistent with plain-text fallbacks, avoid spammy phrasing or excessive links, include clear branding/unsubscribe or support info where appropriate, and throttle/rate-limit verification and reset emails so users aren't flooded. Finally, I would monitor bounce/spam reports via the email provider's dashboard or webhooks and give users a clear "check your spam/junk folder" note alongside the resend-verification option.

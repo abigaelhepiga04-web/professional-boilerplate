@@ -44,7 +44,7 @@ export class AuthService {
        // 1. Find user by email (include password for comparison)
        const user = await userRepository.findOne({
            where: { email },
-           select: { id: true, email: true, name: true, password: true, isActive: true},
+           select: { id: true, email: true, name: true, password: true, isActive: true, isVerified: true},
        });
 
 
@@ -52,6 +52,15 @@ export class AuthService {
            logger.warn('Login attempt with non-existent email', { email });
            throw new UnauthorizedError('Invalid email or password');
        }
+
+       // ADD THIS CHECK RIGHT AFTER:
+        // Check if email is verified
+        if (!user.isVerified) {
+        logger.warn('Login attempt for unverified account', { email });
+        throw new UnauthorizedError(
+            'Please verify your email address before logging in. Check your inbox for the verification link.'
+        );
+        }
 
 
        // 2. Check if user is active

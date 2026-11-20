@@ -9,6 +9,9 @@ import {
 
 @Entity('users')
 @Index(['email'], { unique: true })
+@Index(['verificationToken'], { unique: true })
+@Index(['resetPasswordToken'], { unique: true })
+
 export class User {
     @PrimaryGeneratedColumn()
     id!: number;
@@ -24,6 +27,27 @@ export class User {
 
     @Column({ default: true })
     isActive!: boolean;
+
+    // === EMAIL VERIFICATION FIELDS ===
+  
+   @Column({ default: false })
+   isVerified!: boolean;
+
+   @Column({ type: 'varchar', length: 255, nullable: true, select: false })
+   verificationToken!: string | null;
+
+   @Column({ type: 'datetime', nullable: true })
+   verificationTokenExpiry!: Date | null;
+
+
+   // === PASSWORD RESET FIELDS ===
+  
+   @Column({ type: 'varchar', length: 255, nullable: true, select: false })
+   resetPasswordToken!: string | null;
+
+
+   @Column({ type: 'datetime', nullable: true })
+   resetPasswordExpiry!: Date | null;
 
     @Column({ type: 'int', nullable: true })
     age!: number;
